@@ -1,0 +1,145 @@
+# Manifest sync — the bucket's own way to follow a release.
+#
+# The Homebrew tap is bumped by a push from the release workflow. This
+# bucket is not, and that asymmetry is deliberate: the Scoop manifest
+# carries `checkver` and `autoupdate`, so the bucket already knows how to
+# find a new version and where to read its checksums. Pushing from the
+# main repository as well would give one file two owners.
+#
+# What this workflow does is exactly what an `autoupdate` consumer does,
+# run here on demand: read the latest release, take the two Windows
+# checksums from that release's own SHA256SUMS — the manifest the SLSA
+# provenance covers, never recomputed from a download we would have to
+# trust separately — and rewrite the manifest with them.
+#
+# It is deliberately NOT on a schedule, for the reason the tap's recovery
+# workflow states: GitHub disables scheduled workflows in a public
+# repository after 60 days of inactivity, and this repository is quiet
+# between releases by nature. A cron here would look like a safety net and
+# would rot exactly in the case it was meant to cover.
+name: Update manifest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scoop-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Bump the manifest to the latest release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve the latest release and its checksums
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="tobby-fetch/tobby-fetch"
+
+          tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
+          version="${tag#v}"
+          echo "Latest release: ${tag}"
+
+          gh release download "$tag" --repo "$repo" --pattern SHA256SUMS --output SHA256SUMS
+
+          amd64="$(awk '$2 ~ /tobby-windows-amd64\.exe$/ {print $1}' SHA256SUMS)"
+          arm64="$(awk '$2 ~ /tobby-windows-arm64\.exe$/ {print $1}' SHA256SUMS)"
+          for v in "$amd64" "$arm64"; do
+            case "$v" in
+              [0-9a-f]*) [ "${#v}" -eq 64 ] || { echo "::error::malformed checksum '$v' in SHA256SUMS"; exit 1; } ;;
+              *) echo "::error::missing a windows checksum in SHA256SUMS"; exit 1 ;;
+            esac
+          done
+
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "amd64=${amd64}"
+            echo "arm64=${arm64}"
+          } >> "$GITHUB_OUTPUT"
+          rm -f SHA256SUMS
+
+      - name: Rewrite the manifest
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+          AMD64: ${{ steps.rel.outputs.amd64 }}
+          ARM64: ${{ steps.rel.outputs.arm64 }}
+        run: |
+          set -euo pipefail
+          # Edited as JSON, not by substitution: this file has two hashes
+          # and two URLs that differ only by an architecture word, and a
+          # regex over them is one typo away from swapping them. It is also
+          # how the `##` comment array survives untouched.
+          python3 - <<'PY'
+          import json, os, pathlib, collections
+
+          p = pathlib.Path("bucket/tobby.json")
+          m = json.loads(p.read_text(), object_pairs_hook=collections.OrderedDict)
+          version = os.environ["VERSION"]
+          m["version"] = version
+          for arch, key in (("64bit", "AMD64"), ("arm64", "ARM64")):
+              entry = m["architecture"][arch]
+              entry["hash"] = os.environ[key]
+              # Only the tag moves; the asset name and Scoop's
+              # rename-on-download fragment are the template's business.
+              head, _, tail = entry["url"].partition("/releases/download/")
+              _, _, asset = tail.partition("/")
+              entry["url"] = f"{head}/releases/download/v{version}/{asset}"
+          p.write_text(json.dumps(m, indent=4) + "\n")
+          PY
+
+      - name: Prove the manifest still parses and points where it claims
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+
+          m = json.loads(pathlib.Path("bucket/tobby.json").read_text())
+          version = os.environ["VERSION"]
+          problems = []
+          if m["version"] != version:
+              problems.append(f'version is {m["version"]}, want {version}')
+          for arch in ("64bit", "arm64"):
+              e = m["architecture"][arch]
+              if len(e["hash"]) != 64 or e["hash"] == "0" * 64:
+                  problems.append(f"{arch}: hash is a placeholder or malformed")
+              if f"/v{version}/" not in e["url"]:
+                  problems.append(f'{arch}: url does not carry v{version}: {e["url"]}')
+              if not e["url"].endswith("#/tobby.exe"):
+                  problems.append(f'{arch}: url lost the rename-on-download fragment')
+          if problems:
+              print("::error::" + "; ".join(problems))
+              sys.exit(1)
+          print(f"manifest is on v{version}, both hashes real, both urls pinned")
+          PY
+
+      - name: Commit when the manifest actually moved
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- bucket/tobby.json; then
+            echo "Manifest already on ${TAG} — nothing to do."
+            exit 0
+          fi
+          git config user.name "tobby release bot"
+          git config user.email "noreply@github.com"
+          git add bucket/tobby.json
+          git commit -m "⬆️ tobby ${TAG}: manifest and release checksums
+
+          Checksums taken from the release's SHA256SUMS, which the SLSA
+          provenance covers.
+
+          Signed-off-by: tobby release bot <noreply@github.com>"
+          git push
