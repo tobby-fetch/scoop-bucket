@@ -43,18 +43,18 @@
         "automated bump inherits the same provenance-covered checksums a manual",
         "one would."
     ],
-    "version": "0.5.2",
+    "version": "0.6.0",
     "description": "Secure artifact fetch-and-relocate tool with an embedded OCI registry. Tobby fetches OCI assets \u2014 container images, Helm charts, AI models, and files \u2014 and carries them across isolated network zones, from connected, through restricted, down to fully air-gapped environments.",
     "homepage": "https://tobby-fetch.github.io/tobby-fetch/",
     "license": "GPL-3.0-only",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/tobby-fetch/tobby-fetch/releases/download/v0.5.2/tobby-windows-amd64.exe#/tobby.exe",
-            "hash": "c391a031e75795d97b204d3b8eed5c7387654aa7dd023cbe286092055deed01d"
+            "url": "https://github.com/tobby-fetch/tobby-fetch/releases/download/v0.6.0/tobby-windows-amd64.exe#/tobby.exe",
+            "hash": "312db707a18393a7bebb876b9b8a62a79e555a7d0daec96311df0521cefd75d2"
         },
         "arm64": {
-            "url": "https://github.com/tobby-fetch/tobby-fetch/releases/download/v0.5.2/tobby-windows-arm64.exe#/tobby.exe",
-            "hash": "c7e5e7a4edb4b765fea6fd04f6867d0936bd08e2d80bbb0160bc9c78fd5bacfe"
+            "url": "https://github.com/tobby-fetch/tobby-fetch/releases/download/v0.6.0/tobby-windows-arm64.exe#/tobby.exe",
+            "hash": "011673cc4428bb8f436b42a5b1f5ad3ebee94832c68c0440f1077fd0a40f900f"
         }
     },
     "bin": "tobby.exe",
